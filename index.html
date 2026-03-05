@@ -32,7 +32,7 @@
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             width: 90%;
-            max-width: 600px;
+            max-width: 700px;
         }
         h1 {
             color: var(--primary-color);
@@ -67,7 +67,7 @@
         }
         #startButton { background-color: var(--success-color); }
         #stopButton { background-color: var(--danger-color); }
-        #copyButton { background-color: var(--info-color); }
+        #copyButton, #copyHexButton { background-color: var(--info-color); }
         button:disabled {
             background-color: var(--secondary-color);
             cursor: not-allowed;
@@ -94,15 +94,29 @@
             align-items: center;
             background-color: #fff;
         }
-        #historyOutput {
+        .history-container {
+            display: flex;
+            gap: 1rem;
+        }
+        .history-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .history-wrapper label {
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: var(--secondary-color);
+            margin-bottom: 0.25rem;
+        }
+        textarea {
             width: 100%;
             height: 120px;
-            padding: 1rem;
+            padding: 0.5rem;
             border: 1px solid var(--border-color);
-            border-top: 1px dashed var(--border-color);
-            border-bottom-left-radius: 5px;
-            border-bottom-right-radius: 5px;
-            font-size: 1.2rem;
+            border-radius: 5px;
+            font-size: 1.1rem;
+            font-family: monospace;
             color: var(--text-color);
             background-color: #f8f9fa;
             resize: vertical;
@@ -125,7 +139,8 @@
     <div class="controls">
         <button id="startButton">Start</button>
         <button id="stopButton" disabled>Stop</button>
-        <button id="copyButton" disabled>Copy</button>
+        <button id="copyButton" disabled>Copy Text</button>
+        <button id="copyHexButton" disabled>Copy Hex</button>
     </div>
     <div class="settings">
         <div>
@@ -139,31 +154,40 @@
     </div>
     <canvas id="visualizer"></canvas>
     <div id="currentNoteOutput">--</div>
-    <textarea id="historyOutput" readonly placeholder="Detected note history will appear here..."></textarea>
+    <div class="history-container">
+        <div class="history-wrapper">
+            <label for="historyOutput">Note Name</label>
+            <textarea id="historyOutput" readonly></textarea>
+        </div>
+        <div class="history-wrapper">
+            <label for="hexHistoryOutput">Hex (MIDI)</label>
+            <textarea id="hexHistoryOutput" readonly></textarea>
+        </div>
+    </div>
 </div>
 
 <script type="module">
     import { PitchDetector } from "https://esm.sh/pitchy@4";
 
+    // DOM Elements
     const startButton = document.getElementById('startButton');
     const stopButton = document.getElementById('stopButton');
     const copyButton = document.getElementById('copyButton');
+    const copyHexButton = document.getElementById('copyHexButton');
     const currentNoteOutput = document.getElementById('currentNoteOutput');
     const historyOutput = document.getElementById('historyOutput');
-    
+    const hexHistoryOutput = document.getElementById('hexHistoryOutput');
     const claritySlider = document.getElementById('clarity');
     const clarityValueSpan = document.getElementById('clarityValue');
     const durationThresholdSlider = document.getElementById('durationThreshold');
     const durationThresholdValueSpan = document.getElementById('durationThresholdValue');
-
     const visualizerCanvas = document.getElementById('visualizer');
     const canvasCtx = visualizerCanvas.getContext('2d');
 
+    // App State
     let audioContext, analyserNode, mediaStream, animationFrameId;
     let frequencyDataArray;
-
-    // State for duration filter
-    let lastDetectedNote = null;
+    let lastDetectedNoteInfo = null;
     let noteStartTime = 0;
     let isNoteStable = false;
 
@@ -171,48 +195,52 @@
 
     // --- Event Listeners ---
     claritySlider.addEventListener('input', () => {
-        const fftSize = Math.pow(2, parseInt(claritySlider.value, 10));
-        clarityValueSpan.textContent = fftSize;
+        clarityValueSpan.textContent = Math.pow(2, parseInt(claritySlider.value, 10));
     });
-
     durationThresholdSlider.addEventListener('input', () => {
         durationThresholdValueSpan.textContent = durationThresholdSlider.value;
     });
-
     startButton.addEventListener('click', start);
     stopButton.addEventListener('click', stop);
-    copyButton.addEventListener('click', copyHistory);
+    copyButton.addEventListener('click', () => copyHistory(historyOutput, copyButton, 'Copy Text'));
+    copyHexButton.addEventListener('click', () => copyHistory(hexHistoryOutput, copyHexButton, 'Copy Hex'));
 
     // --- Core Functions ---
-    function frequencyToNoteName(frequency) {
+    function frequencyToNoteInfo(frequency) {
         if (!frequency) return null;
         const midiNum = 12 * (Math.log2(frequency / 440)) + 69;
-        const noteIndex = Math.round(midiNum) % 12;
-        const octave = Math.floor(Math.round(midiNum) / 12) - 1;
-        return noteNames[noteIndex] + octave;
+        const roundedMidiNum = Math.round(midiNum);
+        const noteIndex = roundedMidiNum % 12;
+        const octave = Math.floor(roundedMidiNum / 12) - 1;
+        return {
+            name: noteNames[noteIndex] + octave,
+            midi: roundedMidiNum,
+            hex: roundedMidiNum.toString(16).toUpperCase().padStart(2, '0')
+        };
     }
 
     function update(detector, input, sampleRate) {
         analyserNode.getFloatTimeDomainData(input);
         const [pitch, clarity] = detector.findPitch(input, sampleRate);
         
-        const currentNote = clarity > 0.95 ? frequencyToNoteName(pitch) : null;
-        currentNoteOutput.textContent = currentNote || '--';
+        const currentNoteInfo = clarity > 0.95 ? frequencyToNoteInfo(pitch) : null;
+        currentNoteOutput.textContent = currentNoteInfo ? `${currentNoteInfo.name} (${currentNoteInfo.hex})` : '--';
 
-        // Duration filter logic
         const durationThreshold = parseInt(durationThresholdSlider.value, 10);
         const now = performance.now();
 
-        if (currentNote && currentNote === lastDetectedNote) {
+        if (currentNoteInfo && lastDetectedNoteInfo && currentNoteInfo.midi === lastDetectedNoteInfo.midi) {
             const duration = now - noteStartTime;
             if (duration >= durationThreshold && !isNoteStable) {
-                historyOutput.value += `${currentNote} `;
-                historyOutput.scrollTop = historyOutput.scrollHeight; // Auto-scroll
+                historyOutput.value += `${currentNoteInfo.name} `;
+                hexHistoryOutput.value += `${currentNoteInfo.hex}`;
+                historyOutput.scrollTop = historyOutput.scrollHeight;
+                hexHistoryOutput.scrollTop = hexHistoryOutput.scrollHeight;
                 isNoteStable = true;
-                copyButton.disabled = false;
+                setUIState(true); // Update button states
             }
         } else {
-            lastDetectedNote = currentNote;
+            lastDetectedNoteInfo = currentNoteInfo;
             noteStartTime = now;
             isNoteStable = false;
         }
@@ -235,14 +263,13 @@
             const detector = PitchDetector.forFloat32Array(analyserNode.fftSize);
             const input = new Float32Array(detector.inputLength);
 
-            // Reset state
             historyOutput.value = "";
-            lastDetectedNote = null;
+            hexHistoryOutput.value = "";
+            lastDetectedNoteInfo = null;
             noteStartTime = performance.now();
             isNoteStable = false;
 
             update(detector, input, audioContext.sampleRate);
-
             setUIState(true);
         } catch (err) {
             console.error("Error accessing microphone:", err);
@@ -259,12 +286,11 @@
         setUIState(false);
     }
 
-    function copyHistory() {
-        if (!historyOutput.value) return;
-        navigator.clipboard.writeText(historyOutput.value.trim()).then(() => {
-            const originalText = copyButton.textContent;
-            copyButton.textContent = 'Copied!';
-            setTimeout(() => { copyButton.textContent = originalText; }, 1500);
+    function copyHistory(sourceElement, buttonElement, originalText) {
+        if (!sourceElement.value) return;
+        navigator.clipboard.writeText(sourceElement.value.trim()).then(() => {
+            buttonElement.textContent = 'Copied!';
+            setTimeout(() => { buttonElement.textContent = originalText; }, 1500);
         }).catch(err => {
             console.error('Failed to copy text: ', err);
         });
@@ -275,6 +301,7 @@
         startButton.disabled = isRecording;
         stopButton.disabled = !isRecording;
         copyButton.disabled = isRecording || !historyOutput.value;
+        copyHexButton.disabled = isRecording || !hexHistoryOutput.value;
         claritySlider.disabled = isRecording;
         durationThresholdSlider.disabled = isRecording;
     }
