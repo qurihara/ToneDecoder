@@ -10,9 +10,7 @@
             --secondary-color: #6c757d;
             --bg-color: #f8f9fa;
             --text-color: #212529;
-            --border-color: #dee2e6;
             --success-color: #28a745;
-            --danger-color: #dc3545;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -46,9 +44,8 @@
             margin-bottom: 1.5rem;
             display: flex;
             justify-content: center;
-            gap: 0.5rem;
         }
-        button {
+        #actionButton {
             padding: 0.75rem 1.5rem;
             font-size: 1.2rem;
             border: none;
@@ -56,46 +53,17 @@
             cursor: pointer;
             color: white;
             transition: background-color 0.3s;
+            background-color: var(--success-color);
         }
-        #startButton { background-color: var(--success-color); }
-        #stopButton { background-color: var(--danger-color); }
-        button:disabled {
-            background-color: var(--secondary-color);
-            cursor: not-allowed;
+        #actionButton.is-authenticating {
+            background-color: var(--primary-color);
         }
         #visualizer {
             width: 100%;
-            height: 80px;
+            height: 100px;
             background-color: #000;
             border-radius: 5px;
-            margin-bottom: 1rem;
-        }
-        #currentNoteOutput {
-            padding: 1rem;
-            border: 1px solid var(--border-color);
-            border-radius: 5px;
-            min-height: 60px;
-            font-size: 2rem;
-            font-weight: bold;
-            color: var(--primary-color);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background-color: #fff;
-            margin-bottom: 1rem;
-        }
-        textarea {
-            width: 100%;
-            height: 80px;
-            padding: 0.5rem;
-            border: 1px solid var(--border-color);
-            border-radius: 5px;
-            font-size: 1.1rem;
-            font-family: monospace;
-            color: var(--text-color);
-            background-color: #f8f9fa;
-            resize: vertical;
-            box-sizing: border-box;
+            margin-top: 1rem;
         }
     </style>
 </head>
@@ -103,14 +71,11 @@
 
 <div class="container">
     <h1>Tone Authentication</h1>
-    <p id="instruction">Startを押して認証音を入力してください。</p>
+    <p id="instruction">Startを押して認証音を入力しAuthenticateを押してください。</p>
     <div class="controls">
-        <button id="startButton">Start</button>
-        <button id="stopButton" disabled>Stop</button>
+        <button id="actionButton">Start</button>
     </div>
     <canvas id="visualizer"></canvas>
-    <div id="currentNoteOutput">--</div>
-    <textarea id="hexHistoryOutput" readonly placeholder="Detected hex sequence will appear here for demo..."></textarea>
 </div>
 
 <script type="module">
@@ -123,25 +88,30 @@
     const DURATION_PARAM = parseInt(urlParams.get('duration'), 10) || 200;
 
     // --- DOM Elements ---
-    const startButton = document.getElementById('startButton');
-    const stopButton = document.getElementById('stopButton');
-    const currentNoteOutput = document.getElementById('currentNoteOutput');
-    const hexHistoryOutput = document.getElementById('hexHistoryOutput');
+    const actionButton = document.getElementById('actionButton');
     const visualizerCanvas = document.getElementById('visualizer');
     const canvasCtx = visualizerCanvas.getContext('2d');
 
     // --- App State ---
+    let isRecording = false;
     let audioContext, analyserNode, mediaStream, animationFrameId;
     let frequencyDataArray;
     let lastDetectedNoteInfo = null;
     let noteStartTime = 0;
     let isNoteStable = false;
+    let detectedHexPhrase = '';
 
-    const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    // --- Event Listener ---
+    actionButton.addEventListener('click', handleAction);
 
-    // --- Event Listeners ---
-    startButton.addEventListener('click', start);
-    stopButton.addEventListener('click', stop);
+    // --- Main Handler ---
+    function handleAction() {
+        if (isRecording) {
+            stopAndAuthenticate();
+        } else {
+            startRecording();
+        }
+    }
 
     // --- Core Functions ---
     function frequencyToNoteInfo(frequency) {
@@ -158,15 +128,12 @@
         const [pitch, clarity] = detector.findPitch(input, sampleRate);
         
         const currentNoteInfo = clarity > 0.95 ? frequencyToNoteInfo(pitch) : null;
-        currentNoteOutput.textContent = currentNoteInfo ? currentNoteInfo.hex : '--';
-
         const now = performance.now();
 
         if (currentNoteInfo && lastDetectedNoteInfo && currentNoteInfo.hex === lastDetectedNoteInfo.hex) {
             const duration = now - noteStartTime;
             if (duration >= DURATION_PARAM && !isNoteStable) {
-                hexHistoryOutput.value += currentNoteInfo.hex;
-                hexHistoryOutput.scrollTop = hexHistoryOutput.scrollHeight;
+                detectedHexPhrase += currentNoteInfo.hex;
                 isNoteStable = true;
             }
         } else {
@@ -179,13 +146,12 @@
         animationFrameId = requestAnimationFrame(() => update(detector, input, sampleRate));
     }
 
-    async function start() {
+    async function startRecording() {
         try {
             mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             
             const source = audioContext.createMediaStreamSource(mediaStream);
-            // Use clarity from URL param
             const fftSize = CLARITY_PARAM;
             analyserNode = new AnalyserNode(audioContext, { fftSize });
             source.connect(analyserNode);
@@ -194,20 +160,24 @@
             const detector = PitchDetector.forFloat32Array(analyserNode.fftSize);
             const input = new Float32Array(detector.inputLength);
 
-            hexHistoryOutput.value = "";
+            detectedHexPhrase = '';
             lastDetectedNoteInfo = null;
             noteStartTime = performance.now();
             isNoteStable = false;
 
             update(detector, input, audioContext.sampleRate);
-            setUIState(true);
+            
+            isRecording = true;
+            actionButton.textContent = 'Authenticate';
+            actionButton.classList.add('is-authenticating');
+
         } catch (err) {
             console.error("Error accessing microphone:", err);
             alert("マイクへのアクセスに失敗しました。ブラウザの設定を確認してください。 " + err.message);
         }
     }
 
-    function stop() {
+    function stopAndAuthenticate() {
         if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
         if (audioContext) audioContext.close();
         if (animationFrameId) cancelAnimationFrame(animationFrameId);
@@ -215,11 +185,13 @@
         checkAuthentication();
         
         clearVisuals();
-        setUIState(false);
+        isRecording = false;
+        actionButton.textContent = 'Start';
+        actionButton.classList.remove('is-authenticating');
     }
 
     function checkAuthentication() {
-        const enteredPhrase = hexHistoryOutput.value.trim();
+        const enteredPhrase = detectedHexPhrase.trim();
         if (enteredPhrase === PASS_PHRASE) {
             alert('認証成功');
         } else {
@@ -228,15 +200,9 @@
     }
 
     // --- UI & Drawing Functions ---
-    function setUIState(isRecording) {
-        startButton.disabled = isRecording;
-        stopButton.disabled = !isRecording;
-    }
-
     function clearVisuals() {
         canvasCtx.fillStyle = '#000';
         canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
-        currentNoteOutput.textContent = '--';
     }
 
     function drawVisualizer() {
@@ -257,12 +223,7 @@
     }
 
     // --- Initial Setup ---
-    function initialize() {
-        clearVisuals();
-        setUIState(false);
-    }
-
-    initialize();
+    clearVisuals();
 
 </script>
 </body>
