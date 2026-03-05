@@ -86,6 +86,7 @@
     const PASS_PHRASE = urlParams.get('pass') || '3C3E4041434547'; // Default: C4-G4 scale
     const CLARITY_PARAM = parseInt(urlParams.get('clarity'), 10) || 4096;
     const DURATION_PARAM = parseInt(urlParams.get('duration'), 10) || 200;
+    const REDIRECT_URL = urlParams.get('url');
 
     // --- DOM Elements ---
     const actionButton = document.getElementById('actionButton');
@@ -194,6 +195,9 @@
         const enteredPhrase = detectedHexPhrase.trim();
         if (enteredPhrase === PASS_PHRASE) {
             alert('認証成功');
+            if (REDIRECT_URL) {
+                window.location.href = REDIRECT_URL;
+            }
         } else {
             alert('認証失敗');
         }
