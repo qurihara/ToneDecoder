@@ -111,8 +111,9 @@
     <div id="output">--</div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/pitchy@4.1.0/dist/pitchy.min.js"></script>
-<script>
+<script type="module">
+    import { PitchDetector } from "https://esm.sh/pitchy@4";
+
     const startButton = document.getElementById('startButton');
     const stopButton = document.getElementById('stopButton');
     const outputDiv = document.getElementById('output');
@@ -196,7 +197,7 @@
 
             frequencyDataArray = new Uint8Array(analyserNode.frequencyBinCount);
 
-            const detector = Pitchy.PitchDetector.forFloat32Array(analyserNode.fftSize);
+            const detector = PitchDetector.forFloat32Array(analyserNode.fftSize);
             const input = new Float32Array(detector.inputLength);
 
             update(detector, input, audioContext.sampleRate);
@@ -207,7 +208,7 @@
 
         } catch (err) {
             console.error("Error accessing microphone:", err);
-            alert("マイクへのアクセスに失敗しました。ブラウザの設定を確認してください。");
+            alert("マイクへのアクセスに失敗しました。ブラウザの設定を確認してください。 " + err.message);
         }
     }
 
