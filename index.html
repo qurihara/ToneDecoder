@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tone Decoder</title>
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --bg-color: #f8f9fa;
+            --text-color: #212529;
+            --border-color: #dee2e6;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 500px;
+        }
+        h1 {
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+        }
+        .controls, .settings {
+            margin-bottom: 1.5rem;
+        }
+        button {
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        #startButton {
+            background-color: var(--success-color);
+            margin-right: 0.5rem;
+        }
+        #startButton:hover {
+            background-color: #218838;
+        }
+        #stopButton {
+            background-color: var(--danger-color);
+        }
+        #stopButton:hover {
+            background-color: #c82333;
+        }
+        button:disabled {
+            background-color: var(--secondary-color);
+            cursor: not-allowed;
+        }
+        #visualizer {
+            width: 100%;
+            height: 100px;
+            background-color: #000;
+            border-radius: 5px;
+            margin-bottom: 1.5rem;
+        }
+        #output {
+            padding: 1.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            min-height: 100px;
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: var(--primary-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .settings label {
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+        .settings input[type="range"] {
+            width: 80%;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Tone Decoder</h1>
+    <div class="controls">
+        <button id="startButton">Start</button>
+        <button id="stopButton" disabled>Stop</button>
+    </div>
+    <div class="settings">
+        <label for="clarity">Clarity (FFT Size)</label>
+        <input type="range" id="clarity" min="8" max="14" value="12" step="1">
+        <span id="clarityValue">4096</span>
+    </div>
+    <canvas id="visualizer"></canvas>
+    <div id="output">--</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pitchy@4.1.0/dist/pitchy.min.js"></script>
+<script>
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const outputDiv = document.getElementById('output');
+    const claritySlider = document.getElementById('clarity');
+    const clarityValueSpan = document.getElementById('clarityValue');
+    const visualizerCanvas = document.getElementById('visualizer');
+    const canvasCtx = visualizerCanvas.getContext('2d');
+
+    let audioContext;
+    let analyserNode;
+    let mediaStream;
+    let animationFrameId;
+    let frequencyDataArray;
+
+    const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+    claritySlider.addEventListener('input', () => {
+        const fftSize = Math.pow(2, parseInt(claritySlider.value, 10));
+        clarityValueSpan.textContent = fftSize;
+        if (analyserNode) {
+            analyserNode.fftSize = fftSize;
+        }
+    });
+
+    function frequencyToNoteName(frequency) {
+        if (frequency === 0) return "--";
+        const midiNum = 12 * (Math.log2(frequency / 440)) + 69;
+        const noteIndex = Math.round(midiNum) % 12;
+        const octave = Math.floor(Math.round(midiNum) / 12) - 1;
+        return noteNames[noteIndex] + octave;
+    }
+
+    function drawVisualizer() {
+        analyserNode.getByteFrequencyData(frequencyDataArray);
+
+        canvasCtx.fillStyle = '#000';
+        canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+
+        const barWidth = (visualizerCanvas.width / analyserNode.frequencyBinCount) * 2.5;
+        let barHeight;
+        let x = 0;
+
+        for (let i = 0; i < analyserNode.frequencyBinCount; i++) {
+            barHeight = frequencyDataArray[i];
+
+            const percent = barHeight / 255;
+            const hue = percent * 120 + 240; // Blue to green to red
+
+            canvasCtx.fillStyle = 'hsl(' + hue + ', 100%, 50%)';
+            canvasCtx.fillRect(x, visualizerCanvas.height - barHeight / 2, barWidth, barHeight / 2);
+
+            x += barWidth + 1;
+        }
+    }
+
+    function update(detector, input, sampleRate) {
+        // Pitch detection
+        analyserNode.getFloatTimeDomainData(input);
+        const [pitch, clarity] = detector.findPitch(input, sampleRate);
+
+        if (clarity > 0.95) { // High confidence
+            const noteName = frequencyToNoteName(pitch);
+            outputDiv.textContent = noteName;
+        }
+
+        // Visualization
+        drawVisualizer();
+
+        animationFrameId = requestAnimationFrame(() => update(detector, input, sampleRate));
+    }
+
+    async function start() {
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            const fftSize = Math.pow(2, parseInt(claritySlider.value, 10));
+            analyserNode = new AnalyserNode(audioContext, { fftSize: fftSize });
+            source.connect(analyserNode);
+
+            frequencyDataArray = new Uint8Array(analyserNode.frequencyBinCount);
+
+            const detector = Pitchy.PitchDetector.forFloat32Array(analyserNode.fftSize);
+            const input = new Float32Array(detector.inputLength);
+
+            update(detector, input, audioContext.sampleRate);
+
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            claritySlider.disabled = true;
+
+        } catch (err) {
+            console.error("Error accessing microphone:", err);
+            alert("マイクへのアクセスに失敗しました。ブラウザの設定を確認してください。");
+        }
+    }
+
+    function stop() {
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+        }
+        if (audioContext) {
+            audioContext.close();
+        }
+        if (animationFrameId) {
+            cancelAnimationFrame(animationFrameId);
+        }
+        
+        // Clear canvas
+        canvasCtx.fillStyle = '#000';
+        canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+
+        outputDiv.textContent = "--";
+        startButton.disabled = false;
+        stopButton.disabled = true;
+        claritySlider.disabled = false;
+    }
+
+    startButton.addEventListener('click', start);
+    stopButton.addEventListener('click', stop);
+
+    // Initial setup
+    clarityValueSpan.textContent = Math.pow(2, parseInt(claritySlider.value, 10));
+    canvasCtx.fillStyle = '#000';
+    canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+
+</script>
+</body>
+</html>
+
