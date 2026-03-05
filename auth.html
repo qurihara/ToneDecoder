@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tone Authentication</title>
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --bg-color: #f8f9fa;
+            --text-color: #212529;
+            --border-color: #dee2e6;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 600px;
+        }
+        h1 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+        }
+        p {
+            font-size: 1.2rem;
+            color: var(--secondary-color);
+            margin-bottom: 1.5rem;
+        }
+        .controls {
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        button {
+            padding: 0.75rem 1.5rem;
+            font-size: 1.2rem;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        #startButton { background-color: var(--success-color); }
+        #stopButton { background-color: var(--danger-color); }
+        button:disabled {
+            background-color: var(--secondary-color);
+            cursor: not-allowed;
+        }
+        #visualizer {
+            width: 100%;
+            height: 80px;
+            background-color: #000;
+            border-radius: 5px;
+            margin-bottom: 1rem;
+        }
+        #currentNoteOutput {
+            padding: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            min-height: 60px;
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--primary-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #fff;
+            margin-bottom: 1rem;
+        }
+        textarea {
+            width: 100%;
+            height: 80px;
+            padding: 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            font-size: 1.1rem;
+            font-family: monospace;
+            color: var(--text-color);
+            background-color: #f8f9fa;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Tone Authentication</h1>
+    <p id="instruction">Startを押して認証音を入力してください。</p>
+    <div class="controls">
+        <button id="startButton">Start</button>
+        <button id="stopButton" disabled>Stop</button>
+    </div>
+    <canvas id="visualizer"></canvas>
+    <div id="currentNoteOutput">--</div>
+    <textarea id="hexHistoryOutput" readonly placeholder="Detected hex sequence will appear here for demo..."></textarea>
+</div>
+
+<script type="module">
+    import { PitchDetector } from "https://esm.sh/pitchy@4";
+
+    // --- Config and URL Params ---
+    const urlParams = new URLSearchParams(window.location.search);
+    const PASS_PHRASE = urlParams.get('pass') || '3C3E4041434547'; // Default: C4-G4 scale
+    const CLARITY_PARAM = parseInt(urlParams.get('clarity'), 10) || 4096;
+    const DURATION_PARAM = parseInt(urlParams.get('duration'), 10) || 200;
+
+    // --- DOM Elements ---
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const currentNoteOutput = document.getElementById('currentNoteOutput');
+    const hexHistoryOutput = document.getElementById('hexHistoryOutput');
+    const visualizerCanvas = document.getElementById('visualizer');
+    const canvasCtx = visualizerCanvas.getContext('2d');
+
+    // --- App State ---
+    let audioContext, analyserNode, mediaStream, animationFrameId;
+    let frequencyDataArray;
+    let lastDetectedNoteInfo = null;
+    let noteStartTime = 0;
+    let isNoteStable = false;
+
+    const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+    // --- Event Listeners ---
+    startButton.addEventListener('click', start);
+    stopButton.addEventListener('click', stop);
+
+    // --- Core Functions ---
+    function frequencyToNoteInfo(frequency) {
+        if (!frequency) return null;
+        const midiNum = 12 * (Math.log2(frequency / 440)) + 69;
+        const roundedMidiNum = Math.round(midiNum);
+        return {
+            hex: roundedMidiNum.toString(16).toUpperCase().padStart(2, '0')
+        };
+    }
+
+    function update(detector, input, sampleRate) {
+        analyserNode.getFloatTimeDomainData(input);
+        const [pitch, clarity] = detector.findPitch(input, sampleRate);
+        
+        const currentNoteInfo = clarity > 0.95 ? frequencyToNoteInfo(pitch) : null;
+        currentNoteOutput.textContent = currentNoteInfo ? currentNoteInfo.hex : '--';
+
+        const now = performance.now();
+
+        if (currentNoteInfo && lastDetectedNoteInfo && currentNoteInfo.hex === lastDetectedNoteInfo.hex) {
+            const duration = now - noteStartTime;
+            if (duration >= DURATION_PARAM && !isNoteStable) {
+                hexHistoryOutput.value += currentNoteInfo.hex;
+                hexHistoryOutput.scrollTop = hexHistoryOutput.scrollHeight;
+                isNoteStable = true;
+            }
+        } else {
+            lastDetectedNoteInfo = currentNoteInfo;
+            noteStartTime = now;
+            isNoteStable = false;
+        }
+
+        drawVisualizer();
+        animationFrameId = requestAnimationFrame(() => update(detector, input, sampleRate));
+    }
+
+    async function start() {
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            // Use clarity from URL param
+            const fftSize = CLARITY_PARAM;
+            analyserNode = new AnalyserNode(audioContext, { fftSize });
+            source.connect(analyserNode);
+
+            frequencyDataArray = new Uint8Array(analyserNode.frequencyBinCount);
+            const detector = PitchDetector.forFloat32Array(analyserNode.fftSize);
+            const input = new Float32Array(detector.inputLength);
+
+            hexHistoryOutput.value = "";
+            lastDetectedNoteInfo = null;
+            noteStartTime = performance.now();
+            isNoteStable = false;
+
+            update(detector, input, audioContext.sampleRate);
+            setUIState(true);
+        } catch (err) {
+            console.error("Error accessing microphone:", err);
+            alert("マイクへのアクセスに失敗しました。ブラウザの設定を確認してください。 " + err.message);
+        }
+    }
+
+    function stop() {
+        if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+        if (audioContext) audioContext.close();
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        
+        checkAuthentication();
+        
+        clearVisuals();
+        setUIState(false);
+    }
+
+    function checkAuthentication() {
+        const enteredPhrase = hexHistoryOutput.value.trim();
+        if (enteredPhrase === PASS_PHRASE) {
+            alert('認証成功');
+        } else {
+            alert('認証失敗');
+        }
+    }
+
+    // --- UI & Drawing Functions ---
+    function setUIState(isRecording) {
+        startButton.disabled = isRecording;
+        stopButton.disabled = !isRecording;
+    }
+
+    function clearVisuals() {
+        canvasCtx.fillStyle = '#000';
+        canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+        currentNoteOutput.textContent = '--';
+    }
+
+    function drawVisualizer() {
+        analyserNode.getByteFrequencyData(frequencyDataArray);
+        canvasCtx.fillStyle = '#000';
+        canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+
+        const barWidth = (visualizerCanvas.width / analyserNode.frequencyBinCount) * 2.5;
+        let x = 0;
+        for (let i = 0; i < analyserNode.frequencyBinCount; i++) {
+            const barHeight = frequencyDataArray[i];
+            const percent = barHeight / 255;
+            const hue = percent * 120 + 240;
+            canvasCtx.fillStyle = 'hsl(' + hue + ', 100%, 50%)';
+            canvasCtx.fillRect(x, visualizerCanvas.height - barHeight / 2, barWidth, barHeight / 2);
+            x += barWidth + 1;
+        }
+    }
+
+    // --- Initial Setup ---
+    function initialize() {
+        clearVisuals();
+        setUIState(false);
+    }
+
+    initialize();
+
+</script>
+</body>
+</html>
