@@ -135,6 +135,7 @@
             const duration = now - noteStartTime;
             if (duration >= DURATION_PARAM && !isNoteStable) {
                 detectedHexPhrase += currentNoteInfo.hex;
+                console.log('Detected HEX:', currentNoteInfo.hex);
                 isNoteStable = true;
             }
         } else {
